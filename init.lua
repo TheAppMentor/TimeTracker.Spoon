@@ -1,3 +1,7 @@
+-- 12-July Timer is running over.. i.e 25 mins timer runs for 30 mins.
+-- 12-July Make the webview to show the Summary of tasks https://github.com/asmagill/hammerspoon-config/blob/432c65705203d7743d3298441bd4319137b466fd/_scratch/webviewOtherURLS.lua#L48 
+--
+--
 local obj={}
 
 -- Metadata
@@ -18,123 +22,119 @@ ENABLED = false
 -- Value holding state
 timerState = IS_STOPPED -- initally in stopped state
 
-allTasks = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/allTasks.json")
-selectedTask = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/selectedTask.json")
-timeLog = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json")
+-- Files
+pathToAllTasksFile = "~/.hammerspoon/Spoons/TimeTracker.spoon/allTasks.json"
+pathToSelectedTaskFile = "~/.hammerspoon/Spoons/TimeTracker.spoon/selectedTask.json"
+pathToTimeLogFile = "~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json"
+
+-- Global Timer 
+globalTimer = nil 
+
+-- Global Color
+yellow = hs.drawing.color.colorsFor("Crayons").Lemon
+gray = hs.drawing.color.colorsFor("Crayons").Steel
+green = hs.drawing.color.colorsFor("Crayons").Lime
+
+local grayBar = {font = {size = 16 }, color = gray}
+local greenBar = {font = {size = 16 }, color = green}
+local yellowBar = {font = {size = 16 }, color = yellow}
 
 prashMenuBar = hs.menubar.new()
 
+TOTAL_TIMER_DURATION = 25 * 60       -- 25 Minutes
+TOTAL_INTERVAL_COUNT = 5             -- Traslates to number of bars/ticks in UI
+TIMER_INTERVAL_SECS = (TOTAL_TIMER_DURATION / TOTAL_INTERVAL_COUNT) 
+
 function getCurrentActiveTask() 
-    local selectedBoy = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/selectedTask.json")
+    local selectedBoy = hs.json.read(pathToSelectedTaskFile)
     local currentTaskName = selectedBoy["title"] 
     return currentTaskName
 end
 
-
 function fetchActiveTask() 
-    timeLog = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json")
-    if timelog == nil or #timelog == 0 then 
-        return
-    end
+    local timeLog = hs.json.read(pathToTimeLogFile)
     return timeLog[#timeLog] --Fetch the last task from the time log 
 end
 
 function createBlankTask()
-    -- create dummy task from template 
-    local dummyTask = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/timeLogTemplate.json")
     local currTaskName = getCurrentActiveTask()
-
-    dummyTask["title"] = currTaskName 
-    dummyTask["startTime"] = hs.timer.secondsSinceEpoch()
+    local dummyTask = {}
+    dummyTask.title = currTaskName 
+    dummyTask.startTime = hs.timer.secondsSinceEpoch()
+    dummyTask.status = "RUNNING" 
+    dummyTask.pauses = {} 
 
     -- Write the task to JSON
+    local timeLog = hs.json.read(pathToTimeLogFile)
     table.insert(timeLog, dummyTask)
-    hs.json.write(timeLog, "~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json",true,true)
+    hs.json.write(timeLog, pathToTimeLogFile, true,true)
 end
 
-prashMenuBar = hs.menubar.new()
-
---TIMER_DURATION = 25 * 60 --25 Minutes
-TIMER_DURATION = 15 --25 Secs for Testing 
-TOTAL_INTERVAL_COUNT = 5  -- 3 Secs for Testing
-TIMER_INTERVAL_SECS = TIMER_DURATION / TOTAL_INTERVAL_COUNT 
-
 function updateTimer() 
-
     -- Here we calcuate the time elapsed and set the bars accordingly in the menu bar.
-    --local entireTable = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json")
-    --local currentTask = entireTable[#entireTable]
-
     local currentTask = fetchActiveTask() 
-
     local startTime = currentTask["startTime"] 
    
     -- read the start time from the file. If elapsed time is > 5 mins, update one of the bars.
     local elapsedTime = hs.timer.secondsSinceEpoch() - startTime
+    local isTaskComplete = elapsedTime >= TOTAL_TIMER_DURATION
   
-    local intervalElapsed = math.floor(elapsedTime/TOTAL_INTERVAL_COUNT)
-    local intervalPending = math.floor(TOTAL_INTERVAL_COUNT- intervalElapsed)
+    local intervalElapsed = math.floor(elapsedTime / TIMER_INTERVAL_SECS)
+    local intervalPending = math.floor(TOTAL_INTERVAL_COUNT - intervalElapsed)
 
     local doneString = ""
     local pendingString = ""
 
+    -- https://www.luascript.dev/blog/luas-missing-ternary-operator
+    -- when and is true, the first argument is returned. When or is true, the second argument is used.
+    local inProcessStringLength = isTaskComplete == true and 0 or 1 
+    
     for i=1,intervalElapsed do 
         doneString = doneString .. "▐"
     end
-    
-    for i=1,intervalPending do 
+
+    for i=1,intervalPending - inProcessStringLength do 
         pendingString = pendingString .. "▐"
     end
 
-    local styledText1 = hs.styledtext.new(doneString,{font = {size = 16 }, color = hs.drawing.color.colorsFor("Crayons").Lime})
-    local styledText2 = hs.styledtext.new(pendingString,{font = {size = 16 }, color = hs.drawing.color.colorsFor("Crayons").Steel})
-    local styledBoy = styledText1 .. styledText2
+    local styledInProcessString = hs.styledtext.new("▐", yellowBar)
+    local styledPendingString = hs.styledtext.new(pendingString, grayBar)
+    local styledDoneString = hs.styledtext.new(doneString, greenBar)
 
+    local styledBoy = styledDoneString .. styledInProcessString .. styledPendingString 
+    -- Just got lazy here.. could not think of a logic to make the last bar green when a task completes
+    if inProcessStringLength == 0 then
+        styledBoy = styledDoneString .. styledPendingString 
+    end
     prashMenuBar:setTitle(styledBoy)
 
-    if elapsedTime >= TIMER_DURATION then
+    if isTaskComplete then
         wrapUpActiveTask()
     end
 end
-
--- Global Timer Object
-globalTimer = nil 
 
 function startActiveTask() 
     timerState = IS_RUNNING;
     -- create a blank task with currently selected task.
     createBlankTask()
     buildMainMenu()
+
+    local firstSegmentProcessing = hs.styledtext.new("▐", yellowBar)
+    local remainingSegmentPending = hs.styledtext.new("▐▐▐▐", grayBar)
+
+    prashMenuBar:setTitle(firstSegmentProcessing .. remainingSegmentPending)
+
     globalTimer = hs.timer.doEvery(TIMER_INTERVAL_SECS, updateTimer) 
-end
-
-function stopActiveTask() 
-    timerState = IS_STOPPED;
-
-    --local entireTable = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json")
-    -- local currentTask = entireTable[#entireTable]
-    local currentTask = fetchActiveTask() 
-    currentTask["stopTime"] = hs.timer.secondsSinceEpoch()
-
-
-    updateActiveTask(currentTask)
-    -- Write the task to JSON
-    --timeLog[#timeLog] = currentTask 
-    --hs.json.write(timeLog, "~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json",true,true)
-
-    buildMainMenu()
 end
 
 function pauseActiveTask() 
     timerState = IS_PAUSED;
 
     local currentTask = fetchActiveTask()
-    --local entireTable = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json")
-    --local currentTask = entireTable[#entireTable]
+    currentTask.status = "PAUSED"
 
     -- fetch pauses inside current task
     local pauses = currentTask.pauses
-    --table.insert(pauses, {"pauseStart"})
     local pauseStartTime = hs.timer.secondsSinceEpoch()
 
     local pauseReason = promptForUserInput("Paused","Enter Pause Reason")
@@ -145,17 +145,14 @@ function pauseActiveTask()
     -- Update the last task in the list 
     updateActiveTask(currentTask)
 
-    tempActiveTask["pauses"] = pauses 
+    --tempActiveTask["pauses"] = pauses 
 end
-
 
 function resumePausedTask() 
     timerState = IS_RUNNING;
 
-    --local entireTable = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json")
-    --local currentTask = entireTable[#entireTable]
     local currentTask = fetchActiveTask()
-
+    currentTask.status = "RUNNING"
     -- fetch pauses inside current task
     local pauses = currentTask.pauses
     --table.insert(pauses, {"pauseStart"})
@@ -169,12 +166,7 @@ function resumePausedTask()
 
     -- Update the last task in the list 
     updateActiveTask(currentTask)
-    --timeLog[#timeLog] = currentTask 
-    --hs.json.write(timeLog, "~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json",true,true)
-
-    --tempActiveTask["pauses"] = pauses 
 end
-
 
 function togglePauseState() 
     if timerState == IS_RUNNING then
@@ -196,20 +188,21 @@ function promptForUserInput(title,subTitle)
 end
 
 function wrapUpActiveTask() 
+
+    local currentTask = fetchActiveTask()
+    local promptHeading = "Task Complete" 
+
     if timerState == IS_PAUSED then
-        abandonPausedTask()
-        return
+        currentTask.status = "PAUSE ABANDONED"
+        promptHeading = "Task Abandoned"
+    elseif timerState == IS_RUNNING then
+        currentTask.status = "COMPLETED"
     end
 
     timerState = IS_STOPPED;
-
-    --local entireTable = hs.json.read("~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json")
-    --local currentTask = entireTable[#entireTable]
-    
-    local currentTask = fetchActiveTask()
     currentTask.endTime = hs.timer.secondsSinceEpoch()
 
-    local userInput = promptForUserInput("Task Complete", "Enter Notes")
+    local userInput = promptForUserInput(promptHeading, "Enter Notes")
     currentTask.notes = "Task End : " .. userInput  
 
     updateActiveTask(currentTask)
@@ -221,23 +214,22 @@ function wrapUpActiveTask()
 end
 
 function abandonPausedTask() 
-
+    local currentTask = fetchActiveTask()
+    currentTask.status = "PAUSE ABANDONED"
+    currentTask.endTime = hs.timer.secondsSinceEpoch()
 end
 
 function abandonActiveTask() 
     timerState = IS_STOPPED;
 
     currentTask = fetchActiveTask()
-    currentTask["wasAbandoned"] = true 
+    currentTask.status = "ABANDONED" 
     currentTask.endTime = nil 
     currentTask.timeAbandonded = hs.timer.secondsSinceEpoch()
 
     local abandonReason = promptForUserInput("Task Abandoned", "Enter Reason")
     currentTask.abandonReason = abandonReason 
 
-    -- Update the last task in the list 
-    -- timeLog[#timeLog] = currentTask 
-    -- hs.json.write(timeLog, "~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json",true,true)
     updateActiveTask(currentTask)
 
     globalTimer:stop() 
@@ -246,8 +238,9 @@ end
 
 function updateActiveTask(updatedTask)
     -- Update the last task in the list 
+    local timeLog = hs.json.read(pathToTimeLogFile)
     timeLog[#timeLog] = updatedTask 
-    hs.json.write(timeLog, "~/.hammerspoon/Spoons/TimeTracker.spoon/timeLog.json",true,true)
+    hs.json.write(timeLog, pathToTimeLogFile, true,true)
 end
 
 function obj:init()
@@ -297,16 +290,18 @@ function getStartButtonState()
 end
 
 function setCurrentTask(selectedTask)
-    hs.json.write({title = selectedTask}, "~/.hammerspoon/Spoons/TimeTracker.spoon/selectedTask.json",true,true)
+    hs.json.write({title = selectedTask}, pathToSelectedTaskFile, true,true)
     buildMainMenu()
 end
 
 function buildTaskListMenu(selectedTaskName) 
     local subMenu = {}
 
+    -- fetchAllTasks
+    local allTasks = hs.json.read(pathToAllTasksFile)
+
     for i,task in ipairs(allTasks) do
         local taskTitle = task["title"]
-        --local isSelected = taskTitle == selectedTask["title"]
         local isSelected = taskTitle == selectedTaskName 
         table.insert(subMenu, {title = taskTitle, checked = isSelected, fn = function() setCurrentTask(taskTitle) end })
     end
@@ -344,7 +339,8 @@ function buildMainMenu()
 end
 
 function initializeMenuBar() 
-    local initalString = hs.styledtext.new("▐▐▐▐▐",{font = {size = 16 }, color = hs.drawing.color.colorsFor("Crayons").Steel})
+    -- When we are Idle, we start with a everything diabled/gray color
+    local initalString = hs.styledtext.new("▐▐▐▐▐", grayBar)
     prashMenuBar:setTitle(initalString)
 end
 
@@ -355,14 +351,8 @@ prashMenuBar:setMenu(buildMainMenu)
 return obj
 
 -- Features to implement
-    -- Bug: Task Selection is not working. 
-    -- When a task is stopped or abandoned. We should prompt for reason text .. 
-    -- When a pause exceeds the task duration (30 mins) we should mark the task as abandoned.
-        -- Work on the visual bar indicator - for paused, start and stopped state.
-        -- 
-        -- If PAUSE execceds the task durartion. Automatically abandon the task.
-
-        -- Put the device automiatcialy in DND when a task is running.
--- To Enable and disable DO NOT Disturb
--- https://github.com/derekwyatt/dotfiles/blob/c382fa9e83722c11aa89d124b658862935633645/hammerspoon-init.lua#L278
--- Instead of wasAbandoned. Have a states, ABANDONED. COMPLETED. PAUSE_ABANDONED. IN_RUNNING
+-- When a pause exceeds the task duration (30 mins) we should mark the task as abandoned.
+-- To disable 
+-- Put the device automiatcialy in DND when a task is running.
+    -- To Enable and disable DO NOT Disturb
+    -- https://github.com/derekwyatt/dotfiles/blob/c382fa9e83722c11aa89d124b658862935633645/hammerspoon-init.lua#L278
